@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Firestore basics</title>
+    <link type="text/css" href="{{ url_for('static', path='/styles.css') }}" rel="stylesheet" />
+    <script type="module" src="{{ url_for('static', path='/firebase-login.js') }}"></script>
+  </head>
+  <body>
+    <div id="login-box" hidden="true">
+      Email:<input type="email" id="email" /><br />
+      Password:<input type="password" id="password" /><br />
+      <button id="login">Sign In</button>
+      <button id="sign-up">Sign Up</button>
+    </div>
+    <button id="sign-out" hidden="true">Sign Out</button>
+
+    {% if user_info %}
+      <p>User email: {{ user_info.email }}</p>
+      <p>Error message: {{ error_message }}</p>
+
+      <form action="/add-directory" method="post">
+        <input type="text" name="dir_name" placeholder="Enter directory name" required />
+        <input type="submit" value="Add Directory" />
+      </form>
+
+      <form action="/upload-file" method="post" enctype="multipart/form-data">
+        Upload File:<input type="file" name="file_name" />
+        <input type="submit" />
+      </form>
+
+      <h2>Directories in Bucket</h2><br />
+      {% for dir in directory_list %}
+        <a href="{{ url_for('view_directory') }}?dir_name={{ dir.name|urlencode }}">{{ dir.name }}</a><br />
+      {% endfor %}
+
+      <h2>Files in Bucket</h2><br />
+      {% for file in file_list %}
+        <form action="/download-file" method="post">
+          <input type="hidden" name="filename" value="{{ file.name }}" />
+          {{ file.name }}<input type="submit" value="Download" />
+        </form>
+        <form action="/delete-file" method="post">
+          <input type="hidden" name="filename" value="{{ file.name }}" />
+          <input type="submit" value="Delete" />
+        </form>
+      {% endfor %}
+    {% endif %}
+  </body>
+</html>

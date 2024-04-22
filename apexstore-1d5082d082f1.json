@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "apexstore",
+  "private_key_id": "1d5082d082f1d8dc0e6c0ff357f165ca75e94456",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCYxABfiL5HTaEe\ni3QFg7Qsun/AryGEqWNsy4uKHvc95itdqk9/CM71uXmmirirz0bvoRIqoPblYTFc\nFgJ/Teq+dQ/vCKmITkKjWybbJYXcWHBQ21PLj91i4KRxJCODQ7f3SvKQJI2M7Q9H\nop88eZHCfc6W5IZTTbQs/8WSvO87jAgu0oBjYmt4LMd6ztcKxOroEioa/hVNhMYV\ndO73IO/+y2oDwT9ZS/LZD3XQKBNzoY3VlzzpczCfh7aFuwSb5Wb355M5nl4Wi6QD\nb5z0aFM9wi+CvnfYHpTTBfyMZaYh5j+fb+uVf/GkXVJiZSruo+Ydy4Z32KzROJ0w\nKEEahgNxAgMBAAECggEABNvQALnYRmuIRTDNf/rmPTlxxHq1c9MQ2dYX8izFs4rp\nZG1dIabRsUREw5icIr/BC3BJpAAyVg2LLLj4+5xKa+QMfY9el/qYOTqWD+h/u0g3\nS0UMg1gIJCPNqxkJhZxe4p84O4AkHeAwyRgZnSpnKcLHUiqCwK3DHh7E5YO7jp7b\nCmfTY5I0B0/dAOKceCw3aKUyfzkLgjbgFaysipDtgaSvnb2inE/zC0tzDx1G8VZ7\n3NoNLyxe00zf1TfVdIB7P9i0xBc/IZD2qqGz2288XFpRw3JRu2azDZ5WZlwLatd1\n/OKPamRaQVGCJ+4deiDX8OCoq8J0BhDcqAFUCaAygQKBgQDVlS7yO+CA4qTxv3uw\nRFt0w7I8qXSzqp5w3RCNWEdxURyWetQG9T4pfOEWPNn6NOUx7MGJLb1MJH+Ota0v\nFuYu0wE2DhBXXcVlyFkLvgZfkDaKD+AIKbbudMzU3j0fgwACCdOfJPf8f4+kYEx+\ncuLyC5IiAqlnEzoKOm5DsRfnQQKBgQC3GsyOTh9jY8Gc7aanvumc2NAa1bSVyXqh\nXJeCPtMZb75M349EV2VrfyePPI3J1CdTIgCD6fHrlUZwWz+ZskNt9bZX6fPoYLuH\nfupamkyrASXBBP9cQ6NMnCr/drZoouAPJa+qwTh9winAMWECjKHy1MmLdnGTNShp\nnfWNOQLAMQKBgQCgVnlC0h6MwxiOf3BseDSsKIlyrsf0ZP7CvcJCSeaANCMg+J6Z\nhpwe6yfS2OXOxszUuOblg5fbRH8Z9FtJwYgV2MPM/6vW2odpDImEnigMr6ex548I\nscAprTdkCl6afG6SGSxsCYW9YUnFXaGvP7INgRA4RgVEYxOsQAcs/BJ0wQKBgC7j\nL+po2uTKkLOsr3ZZDt1ZL8EPZFTO6RYU7b8uc0QaNzLcNIWdk5z5TJoDOZOrPf6t\nwFAHQim/afAvjZO/8EBiITVV9V1WF+9UcpKM3IEVpCNPMkzgDRr7Co+sSH1258U5\nM0iYfezGIYbTnjHW7UmPb6TEycSWYijZiB2HscqhAoGASL4qMg2XHkGv8MjGOThD\nShrYQREXS1gnb/FOCA8h+nTLMHS+kqVwumguilus2gKXqeStCCUj0pM9vSgEn+fW\nsGIrUyldn26Vo8Xr6vy80WYiu14O90+BBrb4I5DELgz2O5Hf4zbDkiU7qlspFbdX\nNvsD6cDx8tg0W2O5ghNTmn4=\n-----END PRIVATE KEY-----\n",
+  "client_email": "assa-33@apexstore.iam.gserviceaccount.com",
+  "client_id": "115239165684220884527",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/assa-33%40apexstore.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
