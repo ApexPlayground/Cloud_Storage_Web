@@ -21,24 +21,14 @@ firebase_request_adapter = requests.Request()
 app.mount('/static', StaticFiles(directory='static'), name='static')
 templates = Jinja2Templates(directory='templates')
 
-#function to add directory to buket & firestore 
-def addDirectory(directory_name, parent_directory_id=None):
-    # Adds an empty directory to the storage bucket
-    storage_client = storage.Client(project=local_constants.PROJECT_NAME)
-    bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
+def add_directory(bucket_name, directory_name):
+    """Ensure a directory exists in GCS by creating a placeholder."""
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    if not directory_name.endswith('/'):
+        directory_name += '/'
     blob = bucket.blob(directory_name)
-    blob.upload_from_string('', content_type='application/x-www-form-urlencoded;charset=UTF-8')
-
-    # Adds a directory document to Firestore
-    dir_data = {
-        'path': directory_name,
-        'parent_directory_id': parent_directory_id,
-        'subdirectories': [],
-        'files': []
-    }
-    dir_ref = firestore_db.collection('directories').document()
-    dir_ref.set(dir_data)
-    return dir_ref.id
+    blob.upload_from_string('')  # Upload empty content to create the directory
 
 
 # Adds a file to the storage bucket
@@ -132,11 +122,8 @@ async def root(request: Request):
     error_message = "No error here"
     user_token = validateFirebaseToken(token)
     
-    # Check what user_token contains
-    print("User Token:", user_token)
-    
     if not user_token:
-        return templates.TemplateResponse('main.html', {'request': request, 'error_message': error_message, 'user_info': None})
+        return templates.TemplateResponse('main.html', {'request': request, 'error_message': error_message, 'user_info': None, 'file_list': [], 'directory_list': []})
     
     file_list = []
     directory_list = []
@@ -149,27 +136,33 @@ async def root(request: Request):
             file_list.append(blob)
     
     user_info = getUser(user_token) if user_token else None
-    # Check what user_info contains
-    print("User Info:", user_info)
 
-    return templates.TemplateResponse('main.html', {'request': request, 'error_message': error_message, 'user_info': user_info, 'file_list': file_list, 'directory_list': directory_list})
+    # Fetch directory contents for the root directory
+    root_contents = list_directory_contents(local_constants.PROJECT_STORAGE_BUCKET)
+    
+    # Render the main page template with directory contents included
+    return templates.TemplateResponse('main.html', {
+        'request': request,
+        'error_message': error_message,
+        'user_info': user_info,
+        'file_list': file_list,
+        'directory_list': directory_list,
+        'directory_contents': root_contents  # Pass directory contents to template
+    })
+
 
 
 
 @app.post("/add-directory", response_class=RedirectResponse)
-async def addDirectoryHandler(request: Request):
-    print("Received request to add directory")
+async def add_directory_handler(request: Request):
     form = await request.form()
-    dir_name = form.get('dir_name')
-    if not dir_name:
-        print("No directory name provided")
-        return RedirectResponse(url='/', status_code=status.HTTP_303_SEE_OTHER)
-    if not dir_name.endswith('/'):
-        dir_name += '/'
-    
-    addDirectory(dir_name)
-    #303 to ensure the method changes to GET after redirect
-    return RedirectResponse(url='/', status_code=status.HTTP_303_SEE_OTHER)
+    directory_name = form.get('dir_name')
+    if not directory_name:
+        raise HTTPException(status_code=400, detail="Directory name is required")
+
+    add_directory(local_constants.PROJECT_STORAGE_BUCKET, directory_name)
+
+    return RedirectResponse(url=f"/directory/{directory_name}", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.post("/download-file", response_class=Response)
 async def downloadFileHandler(request: Request):
@@ -237,38 +230,35 @@ async def deleteFileHandler(request: Request):
     deleteFile(filename)
     return RedirectResponse('/', status_code=status.HTTP_302_FOUND)
 
-@app.get("/directory/", response_class=HTMLResponse)
-async def view_directory(request: Request, dir_name: str = ""):
-    # Validate user session
-    token = request.cookies.get("token")
-    user_token = validateFirebaseToken(token)
-    if not user_token:
-        return RedirectResponse('/')
+def list_directory_contents(bucket_name, prefix=''):
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    iterator = storage_client.list_blobs(bucket, prefix=prefix, delimiter='/')
 
-    # Ensure directory name ends with a slash to represent a directory
+    files = []
+    directories = []
+    for page in iterator.pages:
+        files.extend([blob.name for blob in page])
+        directories.extend(page.prefixes)
+
+    return {'files': files, 'directories': directories}
+
+@app.get("/directory/{dir_name:path}", response_class=HTMLResponse)
+async def view_directory(request: Request, dir_name: str = ""):
+    # Normalize the directory name to ensure it ends with '/'
     if not dir_name.endswith('/'):
         dir_name += '/'
-
-    # Fetch directory contents
-    file_list = []
-    directory_list = []
-    blobs = blobList(dir_name)
-    for blob in blobs:
-        if blob.name.endswith('/'):
-            directory_list.append(blob)
-        else:
-            file_list.append(blob)
     
-    # Render directory contents
-    user_info = getUser(user_token) if user_token else None
+    # Fetch directory contents
+    contents = list_directory_contents(local_constants.PROJECT_STORAGE_BUCKET, dir_name)
+    
+    # Render directory contents using your template
     return templates.TemplateResponse('directory_view.html', {
         'request': request,
         'directory_name': dir_name,
-        'file_list': file_list,
-        'directory_list': directory_list,
-        'user_info': user_info
+        'files': contents['files'],
+        'directories': contents['directories']
     })
-
 
 
 

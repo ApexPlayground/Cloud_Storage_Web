@@ -29,18 +29,18 @@
       </form>
 
       <h2>Directories in Bucket</h2><br />
-      {% for dir in directory_list %}
-        <a href="{{ url_for('view_directory') }}?dir_name={{ dir.name|urlencode }}">{{ dir.name }}</a><br />
+      {% for dir in directory_contents.directories %}
+        <a href="{{ url_for('view_directory', dir_name=dir|urlencode) }}">{{ dir }}</a><br />
       {% endfor %}
 
       <h2>Files in Bucket</h2><br />
-      {% for file in file_list %}
+      {% for file in directory_contents.files %}
         <form action="/download-file" method="post">
-          <input type="hidden" name="filename" value="{{ file.name }}" />
-          {{ file.name }}<input type="submit" value="Download" />
+          <input type="hidden" name="filename" value="{{ file }}" />
+          {{ file }}<input type="submit" value="Download" />
         </form>
         <form action="/delete-file" method="post">
-          <input type="hidden" name="filename" value="{{ file.name }}" />
+          <input type="hidden" name="filename" value="{{ file }}" />
           <input type="submit" value="Delete" />
         </form>
       {% endfor %}
