@@ -7,6 +7,7 @@ from google.auth.transport import requests
 from google.cloud import firestore, storage
 import starlette.status as status
 import local_constants
+from datetime import datetime
 
 # Define the app with routing
 app = FastAPI()
@@ -21,12 +22,39 @@ firebase_request_adapter = requests.Request()
 app.mount('/static', StaticFiles(directory='static'), name='static')
 templates = Jinja2Templates(directory='templates')
 
+# Define a filter to remove the trailing slash
+def trim_trailing_slash(path):
+    return path.rstrip('/')
+
+def parent_directory(path):
+   
+    path = path.strip('/')
+    if not path:
+        
+        return ''
+    parts = path.split('/')
+    if len(parts) > 1:
+        return '/'.join(parts[:-1]) + '/'
+    else:
+        
+        return ''
+
+
+
+
+
+
+
+# Register filters with the Jinja environment
+templates.env.filters['trim_trailing_slash'] = trim_trailing_slash
+templates.env.filters['parent_directory'] = parent_directory
+
 #function to add directory to buket & firestore 
 def addDirectory(directory_name, current_path=""):
-    # Ensure the path is correctly formed with a single trailing slash
+    # creating path with slash
     if not current_path.endswith('/'):
         current_path += '/'
-    full_path = f"{current_path}{directory_name}/"  # Ensure this ends with a slash
+    full_path = f"{current_path}{directory_name}/" 
 
     storage_client = storage.Client(project=local_constants.PROJECT_NAME)
     bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
@@ -70,7 +98,7 @@ def downloadBlob(filename):
     return blob.download_as_bytes()
 
 
-from datetime import datetime
+
 
 def getUser(user_token):
     user_id = user_token['user_id']
@@ -120,6 +148,7 @@ def validateFirebaseToken(id_token):
         print(str(err))  # Log the error for debugging
     return user_token
 
+# Root function
 @app.get('/', response_class=HTMLResponse)
 async def root(request: Request):
     token = request.cookies.get("token")
@@ -173,7 +202,7 @@ async def downloadFileHandler(request: Request):
     
     # Retrieve filename from form data for downloadm
     form = await request.form()
-    filename = form.get('filename')  # Use .get() to avoid KeyError
+    filename = form.get('filename')  
     if not filename:
         raise HTTPException(status_code=400, detail="Filename not provided")
 
@@ -184,6 +213,7 @@ async def downloadFileHandler(request: Request):
     return Response(content=file_content, media_type="application/octet-stream", headers=headers)
 
 
+# function to upload file to buket 
 @app.post("/upload-file", response_class=RedirectResponse)
 async def uploadFileHandler(request: Request):
     form = await request.form()
@@ -219,7 +249,7 @@ async def deleteFileHandler(request: Request):
 
     # Retrieve filename from form data for deletion
     form = await request.form()
-    filename = form.get('filename')  # Use .get() to avoid KeyError
+    filename = form.get('filename') 
     if not filename:
         raise HTTPException(status_code=400, detail="Filename not provided")
 
@@ -229,21 +259,22 @@ async def deleteFileHandler(request: Request):
 
 @app.get("/directory/", response_class=HTMLResponse)
 async def view_root_directory(request: Request):
-    return await view_directory(request, dir_name='')
+    # Redirect to the true root
+    return RedirectResponse(url='/')
 
 @app.get("/directory/{dir_name:path}", response_class=HTMLResponse)
-async def view_directory(request: Request, dir_name: str):
+async def view_directory(request: Request, dir_name: str = ''):
     token = request.cookies.get("token")
     user_token = validateFirebaseToken(token)
     if not user_token:
         return RedirectResponse('/')
 
-    # Normalize directory path
-    if not dir_name.endswith('/'):
-        dir_name += '/'
+    # Normalize the directory name to handle root directory
+    dir_name = dir_name.strip('/')
+    full_dir_name = f'/{dir_name}' if dir_name else '/'  # This creates a path with a leading slash
 
-    blobs = blobList(dir_name)
-    blobs_list = list(blobs)  # Convert iterator to list
+    blobs = blobList(dir_name if dir_name else None)  # Call with None if root
+    blobs_list = list(blobs)
 
     file_list = [blob.name for blob in blobs_list if not blob.name.endswith('/')]
     directory_list = [blob.name for blob in blobs_list if blob.name.endswith('/')]
@@ -251,11 +282,17 @@ async def view_directory(request: Request, dir_name: str):
     user_info = getUser(user_token) if user_token else None
     error_message = "This directory is empty." if not file_list and not directory_list else None
 
+    # Calculate the parent directory path for navigation purposes
+    parent_path = parent_directory(full_dir_name) if dir_name else None  # Calculate only if not root
+
     return templates.TemplateResponse('main.html', {
         'request': request,
-        'directory_name': dir_name,  # Ensure this is used correctly in the template
+        'directory_name': full_dir_name,  # Use the normalized full path
         'file_list': file_list,
         'directory_list': directory_list,
         'user_info': user_info,
-        'error_message': error_message
+        'error_message': error_message,
+        'parent_path': parent_path  # Only pass if not root
     })
+
+
