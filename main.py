@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException,Path
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -22,17 +22,21 @@ app.mount('/static', StaticFiles(directory='static'), name='static')
 templates = Jinja2Templates(directory='templates')
 
 #function to add directory to buket & firestore 
-def addDirectory(directory_name, parent_directory_id=None):
-    # Adds an empty directory to the storage bucket
+def addDirectory(directory_name, current_path=""):
+    # Ensure the path is correctly formed with a single trailing slash
+    if not current_path.endswith('/'):
+        current_path += '/'
+    full_path = f"{current_path}{directory_name}/"  # Ensure this ends with a slash
+
     storage_client = storage.Client(project=local_constants.PROJECT_NAME)
     bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
-    blob = bucket.blob(directory_name)
+    blob = bucket.blob(full_path)
     blob.upload_from_string('', content_type='application/x-www-form-urlencoded;charset=UTF-8')
 
-    # Adds a directory document to Firestore
+    # Add the directory data to Firestore under the new full_path
     dir_data = {
-        'path': directory_name,
-        'parent_directory_id': parent_directory_id,
+        'path': full_path,
+        'parent_directory_id': None,
         'subdirectories': [],
         'files': []
     }
@@ -42,24 +46,14 @@ def addDirectory(directory_name, parent_directory_id=None):
 
 
 # Adds a file to the storage bucket
-def addFile(file, directory_id):
-    # Adds a file to the storage bucket
+def addFile(file, current_path=""):
+    # Construct the full path where the file will be uploaded
+    full_path = f"{current_path}{file.filename}" if current_path else file.filename
+    
     storage_client = storage.Client(project=local_constants.PROJECT_NAME)
     bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
-    blob = storage.Blob(file.filename, bucket)
+    blob = storage.Blob(full_path, bucket)
     blob.upload_from_file(file.file)
-
-    # Add file metadata to Firestore
-    file_metadata = {
-        'file_name': file.filename,
-        'directory_id': directory_id,
-        'size': blob.size,
-        'content_type': blob.content_type,
-        'created_at': datetime.now().isoformat()
-    }
-    file_ref = firestore_db.collection('files').document()
-    file_ref.set(file_metadata)
-    return file_ref.id
 
 
 # Returns a list of blobs in the bucket filtered by the prefix
@@ -86,9 +80,9 @@ def getUser(user_token):
     if not user_doc.exists:
         # User data setup
         user_data = {
-            'name': user_token.get('name', 'New User'),  # Assume token contains name
-            'email': user_token.get('email', 'no-email@example.com'),  # Assume token contains email
-            'root_directory': None  # This will be set after creating the directory
+            'name': user_token.get('name', 'New User'), 
+            'email': user_token.get('email', 'no-email@example.com'),  
+            'root_directory': None 
         }
 
         # Create root directory in Firestore
@@ -158,18 +152,16 @@ async def root(request: Request):
 
 @app.post("/add-directory", response_class=RedirectResponse)
 async def addDirectoryHandler(request: Request):
-    print("Received request to add directory")
     form = await request.form()
     dir_name = form.get('dir_name')
+    current_directory = form.get('current_directory', '')
+
     if not dir_name:
-        print("No directory name provided")
         return RedirectResponse(url='/', status_code=status.HTTP_303_SEE_OTHER)
-    if not dir_name.endswith('/'):
-        dir_name += '/'
-    
-    addDirectory(dir_name)
-    #303 to ensure the method changes to GET after redirect
-    return RedirectResponse(url='/', status_code=status.HTTP_303_SEE_OTHER)
+
+    # Add the directory and redirect to the new directory view
+    addDirectory(dir_name, current_directory)
+    return RedirectResponse(url=f'/directory/{current_directory}{dir_name}/', status_code=status.HTTP_303_SEE_OTHER)
 
 @app.post("/download-file", response_class=Response)
 async def downloadFileHandler(request: Request):
@@ -179,7 +171,7 @@ async def downloadFileHandler(request: Request):
     if not user_token:
         return RedirectResponse('/')
     
-    # Retrieve filename from form data for download
+    # Retrieve filename from form data for downloadm
     form = await request.form()
     filename = form.get('filename')  # Use .get() to avoid KeyError
     if not filename:
@@ -194,21 +186,19 @@ async def downloadFileHandler(request: Request):
 
 @app.post("/upload-file", response_class=RedirectResponse)
 async def uploadFileHandler(request: Request):
-    id_token = request.cookies.get("token")
-    user_token = validateFirebaseToken(id_token)
-    if not user_token:
-        return RedirectResponse('/')
-
     form = await request.form()
     file = form['file_name']
+    current_directory = form.get('current_directory', '')
+    
     if not file.filename:
         return RedirectResponse('/', status_code=status.HTTP_302_FOUND)
 
-    # Retrieve the current directory ID from the session or a predetermined root directory ID
-    current_directory_id = request.session.get('current_directory_id', 'root_directory_id')
-    addFile(file, current_directory_id)
+    if not current_directory.endswith('/'):
+        current_directory += '/'
+    full_path = f"{current_directory}{file.filename}"  # Full path construction
 
-    return RedirectResponse(f'/directory/{current_directory_id}', status_code=status.HTTP_302_FOUND)
+    addFile(file, full_path)
+    return RedirectResponse(url=f'/directory/{current_directory}', status_code=status.HTTP_302_FOUND)
 
 
 # Function to delete a file from the storage bucket
@@ -238,38 +228,34 @@ async def deleteFileHandler(request: Request):
     return RedirectResponse('/', status_code=status.HTTP_302_FOUND)
 
 @app.get("/directory/", response_class=HTMLResponse)
-async def view_directory(request: Request, dir_name: str = ""):
-    # Validate user session
+async def view_root_directory(request: Request):
+    return await view_directory(request, dir_name='')
+
+@app.get("/directory/{dir_name:path}", response_class=HTMLResponse)
+async def view_directory(request: Request, dir_name: str):
     token = request.cookies.get("token")
     user_token = validateFirebaseToken(token)
     if not user_token:
         return RedirectResponse('/')
 
-    # Ensure directory name ends with a slash to represent a directory
+    # Normalize directory path
     if not dir_name.endswith('/'):
         dir_name += '/'
 
-    # Fetch directory contents
-    file_list = []
-    directory_list = []
     blobs = blobList(dir_name)
-    for blob in blobs:
-        if blob.name.endswith('/'):
-            directory_list.append(blob)
-        else:
-            file_list.append(blob)
-    
-    # Render directory contents
+    blobs_list = list(blobs)  # Convert iterator to list
+
+    file_list = [blob.name for blob in blobs_list if not blob.name.endswith('/')]
+    directory_list = [blob.name for blob in blobs_list if blob.name.endswith('/')]
+
     user_info = getUser(user_token) if user_token else None
-    return templates.TemplateResponse('directory_view.html', {
+    error_message = "This directory is empty." if not file_list and not directory_list else None
+
+    return templates.TemplateResponse('main.html', {
         'request': request,
-        'directory_name': dir_name,
+        'directory_name': dir_name,  # Ensure this is used correctly in the template
         'file_list': file_list,
         'directory_list': directory_list,
-        'user_info': user_info
+        'user_info': user_info,
+        'error_message': error_message
     })
-
-
-
-
-

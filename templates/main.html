@@ -2,7 +2,8 @@
 <html>
   <head>
     <title>Firestore basics</title>
-    <link type="text/css" href="{{ url_for('static', path='/styles.css') }}" rel="stylesheet" />
+    <link type="text/css" href="{{ url_for('static', path='styles.css') }}" rel="stylesheet" />
+
     <script type="module" src="{{ url_for('static', path='/firebase-login.js') }}"></script>
   </head>
   <body>
@@ -19,18 +20,19 @@
       <p>Error message: {{ error_message }}</p>
 
       <form action="/add-directory" method="post">
+        <input type="hidden" name="current_directory" value="{{ directory_name }}" />
         <input type="text" name="dir_name" placeholder="Enter directory name" required />
         <input type="submit" value="Add Directory" />
       </form>
 
       <form action="/upload-file" method="post" enctype="multipart/form-data">
-        Upload File:<input type="file" name="file_name" />
+        <input type="hidden" name="current_directory" value="{{ directory_name }}" />Upload File:<input type="file" name="file_name" />
         <input type="submit" />
       </form>
 
       <h2>Directories in Bucket</h2><br />
       {% for dir in directory_list %}
-        <a href="{{ url_for('view_directory') }}?dir_name={{ dir.name|urlencode }}">{{ dir.name }}</a><br />
+        <a href="{{ url_for('view_directory', dir_name=dir.name) }}">{{ dir.name }}</a><br />
       {% endfor %}
 
       <h2>Files in Bucket</h2><br />
