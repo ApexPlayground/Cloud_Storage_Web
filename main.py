@@ -1,12 +1,15 @@
-from fastapi import FastAPI, Request, HTTPException,Path
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse, Response,FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import google.oauth2.id_token
 from google.auth.transport import requests
 from google.cloud import firestore, storage
+from starlette.status import HTTP_400_BAD_REQUEST, HTTP_409_CONFLICT, HTTP_200_OK,HTTP_404_NOT_FOUND
 import starlette.status as status
 import local_constants
+from google.api_core.exceptions import NotFound
+from datetime import datetime
 
 # Define the app with routing
 app = FastAPI()
@@ -21,7 +24,7 @@ firebase_request_adapter = requests.Request()
 app.mount('/static', StaticFiles(directory='static'), name='static')
 templates = Jinja2Templates(directory='templates')
 
-# Define a filter to remove the trailing slash
+#filter to remove the trailing slash
 def trim_trailing_slash(path):
     return path.rstrip('/')
 
@@ -36,49 +39,68 @@ def parent_directory(path):
         return '/'.join(parts[:-1]) + '/'
     else:
         return ''
-# Register filters with the Jinja environment
+
+
 templates.env.filters['trim_trailing_slash'] = trim_trailing_slash
 templates.env.filters['parent_directory'] = parent_directory
 
-#function to add directory to buket & firestore 
+
+#path bug fix
+def normalize_path(path):
+    #Remove any redundant slashes from the path
+    while '//' in path:
+        path = path.replace('//', '/')
+    return path.strip('/')
+
+
 def addDirectory(directory_name, current_path=""):
-    # Ensure the path is correctly formed with a single trailing slash
+    # creating path with slash
     if not current_path.endswith('/'):
         current_path += '/'
-    full_path = f"{current_path}{directory_name}/"  # Ensure this ends with a slash
+    full_path = f"{current_path}{directory_name}/"
 
+    # Firestore and Cloud Storage clients
     storage_client = storage.Client(project=local_constants.PROJECT_NAME)
     bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
+    
+    #  unique directory id for Firestore (temp)
+    dir_id = firestore_db.collection('directories').document().id
     blob = bucket.blob(full_path)
     blob.upload_from_string('', content_type='application/x-www-form-urlencoded;charset=UTF-8')
 
-    # Add the directory data to Firestore under the new full_path
+    # Add the directory data to Firestore 
     dir_data = {
+        'id': dir_id,  # Store the generated ID within the document data
         'path': full_path,
         'parent_directory_id': None,
         'subdirectories': [],
         'files': []
     }
-    dir_ref = firestore_db.collection('directories').document()
+    dir_ref = firestore_db.collection('directories').document(dir_id)
     dir_ref.set(dir_data)
-    return dir_ref.id
-
-
-# Adds a file to the storage bucket
-def addFile(file, current_path=""):
-    # Construct the full path where the file will be uploaded
-    full_path = f"{current_path}{file.filename}" if current_path else file.filename
     
+    return dir_id, dir_ref.id
+
+
+def addFile(file, full_path, overwrite=False):
     storage_client = storage.Client(project=local_constants.PROJECT_NAME)
     bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
-    blob = storage.Blob(full_path, bucket)
-    blob.upload_from_file(file.file)
+    blob = bucket.blob(full_path)
 
+    if blob.exists():
+        if overwrite:
+            # Delete the existing file first
+            blob.delete()
+        else:
+            return {"error": "File already exists. Do you want to overwrite it?", "status": HTTP_409_CONFLICT}
 
-# Returns a list of blobs in the bucket filtered by the prefix
-def blobList(prefix=""):
-    storage_client = storage.Client(project=local_constants.PROJECT_NAME)
-    return storage_client.list_blobs(local_constants.PROJECT_STORAGE_BUCKET, prefix=prefix)
+    # Try to upload the file
+    try:
+        blob.upload_from_file(file.file, rewind=True)
+        return {"message": "File uploaded successfully", "status": HTTP_200_OK}
+    except Exception as e:
+        return {"error": str(e), "status": HTTP_400_BAD_REQUEST}
+
 
 
 # Downloads the contents of a blob by filename.
@@ -89,7 +111,7 @@ def downloadBlob(filename):
     return blob.download_as_bytes()
 
 
-from datetime import datetime
+
 
 def getUser(user_token):
     user_id = user_token['user_id']
@@ -136,37 +158,13 @@ def validateFirebaseToken(id_token):
     try:
         user_token = google.oauth2.id_token.verify_firebase_token(id_token, firebase_request_adapter)
     except ValueError as err:
-        print(str(err))  # Log the error for debugging
+        print(str(err))  # test
     return user_token
 
-@app.get('/', response_class=HTMLResponse)
-async def root(request: Request):
-    token = request.cookies.get("token")
-    error_message = "No error here"
-    user_token = validateFirebaseToken(token)
-    
-    # Check what user_token contains
-    print("User Token:", user_token)
-    
-    if not user_token:
-        return templates.TemplateResponse('main.html', {'request': request, 'error_message': error_message, 'user_info': None})
-    
-    file_list = []
-    directory_list = []
-    
-    blobs = blobList(None) 
-    for blob in blobs:
-        if blob.name[-1] == '/':
-            directory_list.append(blob)
-        else:
-            file_list.append(blob)
-    
-    user_info = getUser(user_token) if user_token else None
-    # Check what user_info contains
-    print("User Info:", user_info)
-
-    return templates.TemplateResponse('main.html', {'request': request, 'error_message': error_message, 'user_info': user_info, 'file_list': file_list, 'directory_list': directory_list})
-
+#temp favicon in order to display directo..
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse('static/favicon.ico')
 
 
 @app.post("/add-directory", response_class=RedirectResponse)
@@ -180,17 +178,17 @@ async def addDirectoryHandler(request: Request):
 
     # Add the directory and redirect to the new directory view
     addDirectory(dir_name, current_directory)
-    return RedirectResponse(url=f'/{current_directory}{dir_name}/', status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f'{current_directory}{dir_name}/', status_code=status.HTTP_303_SEE_OTHER)
 
 @app.post("/download-file", response_class=Response)
 async def downloadFileHandler(request: Request):
-    # Validate the user's token from cookies, redirect if invalid
+    # Validate the user's token 
     id_token = request.cookies.get("token")
     user_token = validateFirebaseToken(id_token)
     if not user_token:
         return RedirectResponse('/')
     
-    # Retrieve filename from form data for downloadm
+    # Retrieve filename from form data for download
     form = await request.form()
     filename = form.get('filename')  
     if not filename:
@@ -203,21 +201,33 @@ async def downloadFileHandler(request: Request):
     return Response(content=file_content, media_type="application/octet-stream", headers=headers)
 
 
-@app.post("/upload-file", response_class=RedirectResponse)
+@app.post("/upload-file", response_class=JSONResponse)
 async def uploadFileHandler(request: Request):
     form = await request.form()
-    file = form['file_name']
-    current_directory = form.get('current_directory', '')
-    
-    if not file.filename:
-        return RedirectResponse('/', status_code=status.HTTP_302_FOUND)
+    file = form.get('file_name')
+    overwrite = form.get('overwrite', 'false').lower() == 'true'  
+    current_directory = form.get('current_directory', '/')
 
+    # Basic validation to check if a file is included in the request
+    if not file or not hasattr(file, 'filename') or not file.filename:
+        return JSONResponse(status_code=HTTP_400_BAD_REQUEST, content={"error": "No file provided"})
+
+    # Ensure the directory path ends with a '/'
     if not current_directory.endswith('/'):
         current_directory += '/'
-    full_path = f"{current_directory}{file.filename}"  
 
-    addFile(file, full_path)
-    return RedirectResponse(url=f'/{current_directory}', status_code=status.HTTP_302_FOUND)
+    full_path = f"{current_directory}{file.filename}" 
+
+   
+    result = addFile(file, full_path, overwrite)
+    if result['status'] == HTTP_409_CONFLICT:
+        return JSONResponse(status_code=HTTP_409_CONFLICT, content={"error": result["error"]})
+    elif result['status'] == HTTP_200_OK:
+        return JSONResponse(status_code=HTTP_200_OK, content={"message": result["message"]})
+    else:
+        # Handle unexpected results
+        return JSONResponse(status_code=HTTP_400_BAD_REQUEST, content={"error": "An error occurred during the file upload"})
+
 
 
 # Function to delete a file from the storage bucket
@@ -230,7 +240,7 @@ def deleteFile(filename):
 
 @app.post("/delete-file", response_class=RedirectResponse)
 async def deleteFileHandler(request: Request):
-    # Validate the user's token from cookies, redirect if invalid
+    # Validate the user's token
     id_token = request.cookies.get("token")
     user_token = validateFirebaseToken(id_token)
     if not user_token:
@@ -238,34 +248,40 @@ async def deleteFileHandler(request: Request):
 
     # Retrieve filename from form data for deletion
     form = await request.form()
-    filename = form.get('filename')  # Use .get() to avoid KeyError
+    filename = form.get('filename')  
     if not filename:
         raise HTTPException(status_code=400, detail="Filename not provided")
 
-    # Call the delete function
+   
     deleteFile(filename)
     return RedirectResponse('/', status_code=status.HTTP_302_FOUND)
 
-@app.get("/", response_class=HTMLResponse)
+@app.get(" ", response_class=HTMLResponse)
 async def view_root_directory(request: Request):
     return await view_directory(request, dir_name='')
 
-@app.get("/{dir_name:path}", response_class=HTMLResponse)
+@app.get("{dir_name:path}", response_class=HTMLResponse)
 async def view_directory(request: Request, dir_name: str):
     token = request.cookies.get("token")
     user_token = validateFirebaseToken(token)
-    if not user_token:
-        return RedirectResponse('/')
+    # if not user_token: 
+    #     return RedirectResponse('/') bugged out and was infinitly redirecting 
 
-   
     if not dir_name.endswith('/'):
         dir_name += '/'
 
-    blobs = blobList(dir_name)
-    blobs_list = list(blobs)  # Convert iterator to list
+    print("Directory being viewed:", dir_name)
 
-    file_list = [blob.name for blob in blobs_list if not blob.name.endswith('/')]
-    directory_list = [blob.name for blob in blobs_list if blob.name.endswith('/')]
+    if "favicon.ico" in dir_name:
+         return RedirectResponse('/')
+
+    # Get the list of files and subdirectories
+    blobs, subdirectories = blobList(dir_name)
+    blobs_list = list(blobs)  # Files in the current directory
+
+    # Separate the blobs into files and directories based on whether their names end with '/'
+    file_list = [blob.name for blob in blobs if not blob.name.endswith('/')]
+    directory_list = [prefix for prefix in subdirectories]
 
     user_info = getUser(user_token) if user_token else None
     error_message = "This directory is empty." if not file_list and not directory_list else None
@@ -277,4 +293,106 @@ async def view_directory(request: Request, dir_name: str):
         'directory_list': directory_list,
         'user_info': user_info,
         'error_message': error_message
+    })
+
+# Function to delete a directory
+def deleteDirectory(directory_path):
+    storage_client = storage.Client(project=local_constants.PROJECT_NAME)
+    bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
+    
+    # Normalize the path to ensure it ends with a '/'
+    if not directory_path.endswith('/'):
+        directory_path += '/'
+    
+    # Get the Firestore document reference
+    dirs_collection = firestore_db.collection('directories')
+    dir_docs = dirs_collection.where('path', '==', directory_path).stream()
+
+    dir_doc = next(dir_docs, None)
+    if not dir_doc:
+        return {"error": "Directory not found", "status": HTTP_404_NOT_FOUND}
+
+    # Check for existing files and subdirectories
+    blobs = list(bucket.list_blobs(prefix=directory_path))
+    if any(blob.name != directory_path for blob in blobs):  
+        return {"error": "Directory is not empty", "status": HTTP_409_CONFLICT, "message": "Directory is not empty. Please remove all contents first."}
+
+    # If directory is empty, proceed with deletion
+    for blob in blobs:
+        try:
+            blob.delete()
+        except NotFound:
+            continue  
+    
+    # Delete the directory document from Firestore
+    dir_doc.reference.delete()
+
+    return {"message": "Directory deleted successfully", "status": HTTP_200_OK}
+
+
+
+@app.post("/delete-directory", response_class=JSONResponse)
+async def deleteDirectoryHandler(request: Request):
+    form = await request.form()
+    directory_path = form.get('directory_path')
+    if not directory_path:
+        return JSONResponse(status_code=HTTP_400_BAD_REQUEST, content={"error": "Directory path not provided"})
+
+    result = deleteDirectory(directory_path)
+    if "error" in result:
+        return JSONResponse(status_code=result["status"], content={"error": result["error"], "message": result.get("message", "An error occurred")})
+    return JSONResponse(status_code=result["status"], content={"message": result["message"]})
+
+
+
+
+# Returns a list of blobs in the bucket filtered by the prefix
+def blobList(prefix="", delimiter="/"):
+    storage_client = storage.Client(project=local_constants.PROJECT_NAME)
+    if prefix and not prefix.endswith(delimiter):
+        prefix += delimiter
+
+    iterator = storage_client.list_blobs(
+        local_constants.PROJECT_STORAGE_BUCKET, prefix=prefix, delimiter=delimiter
+    )
+
+    blobs_list = list(iterator)
+    subdirectory_prefixes = set(iterator.prefixes) if hasattr(iterator, 'prefixes') else set()
+
+    if prefix == "":
+        subdirectory_prefixes.discard(delimiter)
+
+    return blobs_list, subdirectory_prefixes
+
+
+@app.get('/', response_class=HTMLResponse)
+async def root(request: Request):
+    token = request.cookies.get("token")
+    user_token = validateFirebaseToken(token)
+    
+    if not user_token:
+        return templates.TemplateResponse('main.html', {
+            'request': request, 
+            'error_message': "No error here", 
+            'user_info': None
+        })
+    
+    # Call blobList without a prefix to get the blobs in the root directory
+    blobs, subdirectory_prefixes = blobList()
+    print("Blobs at root:", blobs)
+    print("Subdirectories at root:", subdirectory_prefixes)
+
+    file_list = [blob.name for blob in blobs if not blob.name.endswith('/')]
+    directory_list = list(subdirectory_prefixes)
+    print("File list:", file_list)
+    print("Directory list:", directory_list)
+    
+    user_info = getUser(user_token) if user_token else None
+
+    return templates.TemplateResponse('main.html', {
+        'request': request, 
+        'error_message': "No error here", 
+        'user_info': user_info, 
+        'file_list': file_list, 
+        'directory_list': directory_list
     })

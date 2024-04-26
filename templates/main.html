@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>Firestore basics</title>
+    <title>Firestore Basics</title>
     <link type="text/css" href="{{ url_for('static', path='styles.css') }}" rel="stylesheet" />
     <script type="module" src="{{ url_for('static', path='/firebase-login.js') }}"></script>
   </head>
@@ -18,30 +18,35 @@
       <p>User email: {{ user_info.email }}</p>
       <p>Error message: {{ error_message }}</p>
 
-      <form action="/add-directory" method="post">
+      <form id="directory-form" action="/add-directory" method="post">
         <input type="hidden" name="current_directory" value="{{ directory_name }}" />
         <input type="text" name="dir_name" placeholder="Enter directory name" required />
         <input type="submit" value="Add Directory" />
       </form>
 
-      <form action="/upload-file" method="post" enctype="multipart/form-data">
+      <form id="upload-form" action="/upload-file" method="post" enctype="multipart/form-data">
         <input type="hidden" name="current_directory" value="{{ directory_name }}" />Upload File:<input type="file" name="file_name" />
-        <input type="submit" />
+        <input type="submit" value="Upload" />
       </form>
 
       <h2>Directories in Bucket</h2><br />
       {% for dir in directory_list %}
-        <a href="{{ url_for('view_directory', dir_name=dir.name) }}">{{ dir.name }}</a><br />
+        <a href="{{ url_for('view_directory', dir_name=dir) }}">{{ dir }}</a>
+        <form id="delete-dir-form-{{ loop.index }}" action="/delete-directory" method="post" style="display: inline;">
+          <input type="hidden" name="directory_path" value="{{ dir }}" />
+          <input type="submit" value="Delete" onclick="confirmDelete(event, {{ loop.index }});" />
+        </form><br />
       {% endfor %}
 
       <h2>Files in Bucket</h2><br />
       {% for file in file_list %}
         <form action="/download-file" method="post">
-          <input type="hidden" name="filename" value="{{ file.name }}" />
-          {{ file.name }}<input type="submit" value="Download" />
+          <input type="hidden" name="filename" value="{{ file }}" />
+          {{ file }}
+          <input type="submit" value="Download" />
         </form>
         <form action="/delete-file" method="post">
-          <input type="hidden" name="filename" value="{{ file.name }}" />
+          <input type="hidden" name="filename" value="{{ file }}" />
           <input type="submit" value="Delete" />
         </form>
       {% endfor %}
@@ -50,5 +55,73 @@
         <a href="{{ url_for('view_directory', dir_name=directory_name|parent_directory) }}" class="btn">Go Up One Level</a>
       {% endif %}
     {% endif %}
+
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        const uploadForm = document.getElementById('upload-form')
+        uploadForm.addEventListener('submit', function (event) {
+          event.preventDefault()
+          const formData = new FormData(this)
+          uploadFile(formData)
+        })
+      })
+      
+      async function uploadFile(formData) {
+        try {
+          const response = await fetch('/upload-file', {
+            method: 'POST',
+            body: formData
+          })
+      
+          const result = await response.json()
+      
+          if (response.status === 409) {
+            // Conflict, file exists
+            if (confirm(result.error + ' Click OK to overwrite.')) {
+              formData.append('overwrite', 'true')
+              uploadFile(formData)
+            } else {
+              alert('Upload canceled.')
+            }
+          } else {
+            alert(result.message)
+            window.location.reload()
+          }
+        } catch (error) {
+          alert(error.message)
+        }
+      }
+      
+      function confirmDelete(event, index) {
+        event.preventDefault() // Prevent form from submitting normally
+        if (confirm('Are you sure you want to delete this directory and all its contents?')) {
+          const form = document.getElementById('delete-dir-form-' + index)
+          const formData = new FormData(form)
+          deleteDirectory(formData)
+        }
+      }
+      
+      async function deleteDirectory(formData) {
+        try {
+          const response = await fetch('/delete-directory', {
+            method: 'POST',
+            body: formData
+          })
+      
+          const result = await response.json()
+      
+          if (response.ok) {
+            alert('Directory deleted successfully')
+            window.location.reload() // Reload the page to reflect changes
+          } else if (response.status === 409) {
+            alert('Directory is not empty. Please delete all contents before deleting the directory.')
+          } else {
+            alert('Error: ' + result.error)
+          }
+        } catch (error) {
+          alert('Failed to delete directory: ' + error.message)
+        }
+      }
+    </script>
   </body>
 </html>
