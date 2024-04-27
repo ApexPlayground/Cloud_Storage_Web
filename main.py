@@ -10,6 +10,7 @@ import starlette.status as status
 import local_constants
 from google.api_core.exceptions import NotFound
 from datetime import datetime
+import hashlib
 
 # Define the app with routing
 app = FastAPI()
@@ -54,63 +55,67 @@ def normalize_path(path):
 
 
 def addDirectory(directory_name, current_path=""):
-    # creating path with slash
-    if not current_path.endswith('/'):
-        current_path += '/'
-    full_path = f"{current_path}{directory_name}/"
+    try:
+        # Creating path with slash
+        if not current_path.endswith('/'):
+            current_path += '/'
+        full_path = f"{current_path}{directory_name}/"
 
-    # Firestore and Cloud Storage clients
-    storage_client = storage.Client(project=local_constants.PROJECT_NAME)
-    bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
-    
-    #  unique directory id for Firestore (temp)
-    dir_id = firestore_db.collection('directories').document().id
-    blob = bucket.blob(full_path)
-    blob.upload_from_string('', content_type='application/x-www-form-urlencoded;charset=UTF-8')
+        # Firestore and Cloud Storage clients
+        storage_client = storage.Client(project=local_constants.PROJECT_NAME)
+        bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
+        
+        # Unique directory id for Firestore (temp)
+        dir_id = firestore_db.collection('directories').document().id
+        blob = bucket.blob(full_path)
+        blob.upload_from_string('', content_type='application/x-www-form-urlencoded;charset=UTF-8')
 
-    # Add the directory data to Firestore 
-    dir_data = {
-        'id': dir_id,  # Store the generated ID within the document data
-        'path': full_path,
-        'parent_directory_id': None,
-        'subdirectories': [],
-        'files': []
-    }
-    dir_ref = firestore_db.collection('directories').document(dir_id)
-    dir_ref.set(dir_data)
-    
-    return dir_id, dir_ref.id
+        # Add the directory data to Firestore 
+        dir_data = {
+            'id': dir_id,  # Store the generated ID within the document data
+            'path': full_path,
+            'parent_directory_id': None,
+            'subdirectories': [],
+            'files': []
+        }
+        dir_ref = firestore_db.collection('directories').document(dir_id)
+        dir_ref.set(dir_data)
+        
+        return {"message": "Directory created successfully", "directory_id": dir_id, "directory_data": dir_data}
+    except Exception as e:
+        return {"error": str(e), "status": 500}
+
+
+
 
 
 def addFile(file, full_path, overwrite=False):
-    storage_client = storage.Client(project=local_constants.PROJECT_NAME)
-    bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
-    blob = bucket.blob(full_path)
-
-    if blob.exists():
-        if overwrite:
-            # Delete the existing file first
-            blob.delete()
-        else:
-            return {"error": "File already exists. Do you want to overwrite it?", "status": HTTP_409_CONFLICT}
-
-    # Try to upload the file
     try:
+        storage_client = storage.Client(project=local_constants.PROJECT_NAME)
+        bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
+        blob = bucket.blob(full_path)
+
+        if blob.exists():
+            if overwrite:
+                blob.delete()
+            else:
+                return {"error": "File already exists. Do you want to overwrite it?", "status": 409}
+
         blob.upload_from_file(file.file, rewind=True)
-        return {"message": "File uploaded successfully", "status": HTTP_200_OK}
+
+        # Add file metadata to Firestore
+        file_data = {
+            'name': blob.name,
+            'path': full_path,
+            'content_type': blob.content_type,
+            'size': blob.size,
+            'created_at': datetime.now().isoformat()
+        }
+        firestore_db.collection('files').add(file_data)
+
+        return {"message": "File uploaded successfully", "status": 200}
     except Exception as e:
-        return {"error": str(e), "status": HTTP_400_BAD_REQUEST}
-
-
-
-# Downloads the contents of a blob by filename.
-def downloadBlob(filename):
-    storage_client = storage.Client(project=local_constants.PROJECT_NAME)
-    bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
-    blob = bucket.get_blob(filename)
-    return blob.download_as_bytes()
-
-
+        return {"error": str(e), "status": 400}
 
 
 def getUser(user_token):
@@ -119,34 +124,45 @@ def getUser(user_token):
     user_doc = user_doc_ref.get()
 
     if not user_doc.exists:
-        # User data setup
-        user_data = {
-            'name': user_token.get('name', 'New User'), 
-            'email': user_token.get('email', 'no-email@example.com'),  
-            'root_directory': None 
-        }
+        try:
+            # Setup initial user data
+            user_data = {
+                'name': user_token.get('name', 'New User'),
+                'email': user_token.get('email', 'no-email@example.com'),
+                'root_directory': None
+            }
 
-        # Create root directory in Firestore
-        root_directory_data = {
-            'path': '/',
-            'parent_directory_id': None,  # No parent for root
-            'subdirectories': [],
-            'files': [],
-            'created_at': datetime.now().isoformat()
-        }
-        root_dir_ref = firestore_db.collection('directories').document()
-        root_dir_ref.set(root_directory_data)
+            # Create root directory in Firestore
+            root_dir_ref = firestore_db.collection('directories').document()
+            root_directory_data = {
+                'path': '/',
+                'parent_directory_id': None,
+                'subdirectories': [],
+                'files': [],
+                'created_at': datetime.now().isoformat()
+            }
+            root_dir_ref.set(root_directory_data)
 
-        # Update user data with root directory reference
-        user_data['root_directory'] = root_dir_ref.id
-        user_doc_ref.set(user_data)
+            # Update user data with root directory reference
+            user_data['root_directory'] = root_dir_ref.id
+            user_doc_ref.set(user_data)
 
-        # Return complete user data including root directory
-        user_data['id'] = user_id
-        return user_data
+            # Complete user data including root directory
+            user_data['id'] = user_id
+            return user_data
+        except Exception as e:
+            return {"error": str(e), "status": 500}
     else:
-        # Return existing user data
         return user_doc.to_dict()
+
+    
+# Downloads the contents of a blob by filename.
+def downloadBlob(filename):
+    storage_client = storage.Client(project=local_constants.PROJECT_NAME)
+    bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
+    blob = bucket.get_blob(filename)
+    return blob.download_as_bytes()
+
 
 
 
@@ -363,6 +379,8 @@ def blobList(prefix="", delimiter="/"):
         subdirectory_prefixes.discard(delimiter)
 
     return blobs_list, subdirectory_prefixes
+
+
 
 
 @app.get('/', response_class=HTMLResponse)
