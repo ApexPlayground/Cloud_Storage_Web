@@ -11,6 +11,8 @@ import local_constants
 from google.api_core.exceptions import NotFound
 from datetime import datetime
 import hashlib
+import base64
+
 
 # Define the app with routing
 app = FastAPI()
@@ -72,7 +74,7 @@ def addDirectory(directory_name, current_path=""):
 
         # Add the directory data to Firestore 
         dir_data = {
-            'id': dir_id,  # Store the generated ID within the document data
+            'id': dir_id,  
             'path': full_path,
             'parent_directory_id': None,
             'subdirectories': [],
@@ -89,33 +91,51 @@ def addDirectory(directory_name, current_path=""):
 
 
 
-def addFile(file, full_path, overwrite=False):
+async def addFile(file, full_path, overwrite=False):
     try:
         storage_client = storage.Client(project=local_constants.PROJECT_NAME)
         bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
         blob = bucket.blob(full_path)
 
-        if blob.exists():
-            if overwrite:
-                blob.delete()
-            else:
-                return {"error": "File already exists. Do you want to overwrite it?", "status": 409}
+        # Read file content
+        file_content = await file.read()
+        await file.seek(0)  # Reset the file pointer if needed
 
-        blob.upload_from_file(file.file, rewind=True)
+        # Check for duplicates in the current directory by comparing MD5 hashes
+        directory_path = '/'.join(full_path.split('/')[:-1]) + '/'
+        blobs = bucket.list_blobs(prefix=directory_path)
 
-        # Add file metadata to Firestore
+        # Get the MD5 hash of the file to be uploaded
+        local_md5_hash = hashlib.md5(file_content).hexdigest()
+        duplicate_files = []
+
+        for existing_blob in blobs:
+            # Blob's md5_hash is base64 encoded, so decode it first
+            existing_md5_hash = base64.b64decode(existing_blob.md5_hash).hex()
+            if existing_md5_hash == local_md5_hash:
+                duplicate_files.append(existing_blob.name)
+
+        if duplicate_files:
+            return {"error": "Duplicate file detected based on content.", "status": 409, "duplicate_files": duplicate_files}
+
+        # If no duplicates, upload the file
+        blob.upload_from_string(file_content, content_type=file.content_type)
+
+        # Add file metadata to Firestore including the MD5 hash
         file_data = {
             'name': blob.name,
             'path': full_path,
             'content_type': blob.content_type,
             'size': blob.size,
-            'created_at': datetime.now().isoformat()
+            'created_at': datetime.now().isoformat(),
+            'hash': local_md5_hash  # Store the MD5 hash
         }
         firestore_db.collection('files').add(file_data)
 
         return {"message": "File uploaded successfully", "status": 200}
     except Exception as e:
         return {"error": str(e), "status": 400}
+
 
 
 def getUser(user_token):
@@ -219,12 +239,16 @@ async def downloadFileHandler(request: Request):
 
 @app.post("/upload-file", response_class=JSONResponse)
 async def uploadFileHandler(request: Request):
+    id_token = request.cookies.get("token")
+    user_token = validateFirebaseToken(id_token)
+    if not user_token:
+        return RedirectResponse('/', status_code=HTTP_400_BAD_REQUEST)
+
     form = await request.form()
     file = form.get('file_name')
     overwrite = form.get('overwrite', 'false').lower() == 'true'  
     current_directory = form.get('current_directory', '/')
 
-    # Basic validation to check if a file is included in the request
     if not file or not hasattr(file, 'filename') or not file.filename:
         return JSONResponse(status_code=HTTP_400_BAD_REQUEST, content={"error": "No file provided"})
 
@@ -232,10 +256,10 @@ async def uploadFileHandler(request: Request):
     if not current_directory.endswith('/'):
         current_directory += '/'
 
-    full_path = f"{current_directory}{file.filename}" 
+    full_path = f"{current_directory}{file.filename}"
 
-   
-    result = addFile(file, full_path, overwrite)
+    # Correct use of await with the asynchronous addFile function
+    result = await addFile(file, full_path, overwrite)
     if result['status'] == HTTP_409_CONFLICT:
         return JSONResponse(status_code=HTTP_409_CONFLICT, content={"error": result["error"]})
     elif result['status'] == HTTP_200_OK:
@@ -243,6 +267,7 @@ async def uploadFileHandler(request: Request):
     else:
         # Handle unexpected results
         return JSONResponse(status_code=HTTP_400_BAD_REQUEST, content={"error": "An error occurred during the file upload"})
+
 
 
 
@@ -274,6 +299,10 @@ async def deleteFileHandler(request: Request):
 
 @app.get(" ", response_class=HTMLResponse)
 async def view_root_directory(request: Request):
+    id_token = request.cookies.get("token")
+    user_token = validateFirebaseToken(id_token)
+    if not user_token:
+        return RedirectResponse('/')
     return await view_directory(request, dir_name='')
 
 @app.get("{dir_name:path}", response_class=HTMLResponse)
