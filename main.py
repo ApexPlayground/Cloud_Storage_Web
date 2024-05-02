@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response,FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -12,7 +12,6 @@ from google.api_core.exceptions import NotFound
 from datetime import datetime
 import hashlib
 import base64
-
 
 # Define the app with routing
 app = FastAPI()
@@ -87,54 +86,62 @@ def addDirectory(directory_name, current_path=""):
     except Exception as e:
         return {"error": str(e), "status": 500}
 
-
-
-
-
 async def addFile(file, full_path, overwrite=False):
     try:
         storage_client = storage.Client(project=local_constants.PROJECT_NAME)
         bucket = storage_client.bucket(local_constants.PROJECT_STORAGE_BUCKET)
         blob = bucket.blob(full_path)
 
-        # Read file content
+        # Read file content and calculate hash
         file_content = await file.read()
-        await file.seek(0)  # Reset the file pointer if needed
+        local_md5_hash = hashlib.md5(file_content).hexdigest()
+        await file.seek(0)  
 
-        # Check for duplicates in the current directory by comparing MD5 hashes
+        # Check if file with the same name exists
+        if blob.exists():
+            if overwrite:
+                blob.delete()  # Delete the existing blob if overwrite is true
+            else:
+                # File exists and overwrite is not enabled
+                return {"error": "File already exists. Do you want to overwrite it?", "status": 409, "overwrite_required": True}
+
+        # Check for duplicates based on content hash
         directory_path = '/'.join(full_path.split('/')[:-1]) + '/'
         blobs = bucket.list_blobs(prefix=directory_path)
-
-        # Get the MD5 hash of the file to be uploaded
-        local_md5_hash = hashlib.md5(file_content).hexdigest()
+        duplicate_content = False
         duplicate_files = []
 
         for existing_blob in blobs:
-            # Blob's md5_hash is base64 encoded, so decode it first
-            existing_md5_hash = base64.b64decode(existing_blob.md5_hash).hex()
+            existing_md5_hash = base64.b64decode(existing_blob.md5_hash).hex() if existing_blob.md5_hash else None
             if existing_md5_hash == local_md5_hash:
                 duplicate_files.append(existing_blob.name)
+                duplicate_content = True
 
-        if duplicate_files:
-            return {"error": "Duplicate file detected based on content.", "status": 409, "duplicate_files": duplicate_files}
-
-        # If no duplicates, upload the file
+        # Upload the file
         blob.upload_from_string(file_content, content_type=file.content_type)
 
-        # Add file metadata to Firestore including the MD5 hash
+        # Add file metadata to Firestore
         file_data = {
             'name': blob.name,
             'path': full_path,
             'content_type': blob.content_type,
             'size': blob.size,
             'created_at': datetime.now().isoformat(),
-            'hash': local_md5_hash  # Store the MD5 hash
+            'hash': local_md5_hash,
+            'is_duplicate_content': duplicate_content  
         }
         firestore_db.collection('files').add(file_data)
 
-        return {"message": "File uploaded successfully", "status": 200}
+        return {
+            "message": "File uploaded successfully",
+            "status": 200,
+            "duplicate_content": duplicate_content,
+            "duplicate_files": duplicate_files
+        }
     except Exception as e:
         return {"error": str(e), "status": 400}
+    
+
 
 
 
@@ -245,29 +252,27 @@ async def uploadFileHandler(request: Request):
         return RedirectResponse('/', status_code=HTTP_400_BAD_REQUEST)
 
     form = await request.form()
-    file = form.get('file_name')
-    overwrite = form.get('overwrite', 'false').lower() == 'true'  
+    file: UploadFile = form.get('file_name')
+    overwrite = form.get('overwrite', 'false').lower() == 'true'
     current_directory = form.get('current_directory', '/')
 
-    if not file or not hasattr(file, 'filename') or not file.filename:
+    if not file or not file.filename:
         return JSONResponse(status_code=HTTP_400_BAD_REQUEST, content={"error": "No file provided"})
 
-    # Ensure the directory path ends with a '/'
-    if not current_directory.endswith('/'):
-        current_directory += '/'
-
-    full_path = f"{current_directory}{file.filename}"
-
-    # Correct use of await with the asynchronous addFile function
+    full_path = f"{current_directory.rstrip('/')}/{file.filename}"
     result = await addFile(file, full_path, overwrite)
-    if result['status'] == HTTP_409_CONFLICT:
-        return JSONResponse(status_code=HTTP_409_CONFLICT, content={"error": result["error"]})
-    elif result['status'] == HTTP_200_OK:
-        return JSONResponse(status_code=HTTP_200_OK, content={"message": result["message"]})
-    else:
-        # Handle unexpected results
-        return JSONResponse(status_code=HTTP_400_BAD_REQUEST, content={"error": "An error occurred during the file upload"})
 
+    if 'overwrite_required' in result:
+        return JSONResponse(status_code=HTTP_409_CONFLICT, content=result)
+    elif result['status'] == HTTP_200_OK:
+        content = {
+            "message": result["message"],
+            "duplicate_content": result["duplicate_content"],
+            "duplicate_files": result["duplicate_files"]
+        }
+        return JSONResponse(status_code=HTTP_200_OK, content=content)
+    else:
+        return JSONResponse(status_code=HTTP_400_BAD_REQUEST, content={"error": result["error"]})
 
 
 
